@@ -2,7 +2,7 @@
 
 DeepSeek Harness 多租户插件：把 DSH 从"本地单用户开发工具"扩展为**多租户、多角色、可登录、可计量、可审计**的服务形态。
 
-> 状态：**M3 完成**（用量统计 + 配额；M1 网关/登录、M2 多租户/RBAC 已在前序里程碑完成）
+> 状态：**M4 完成**（审计日志视图 + 审计员角色 + CSV 导出 + 强制下线；M1-M3 已完成）
 > 方案文档：`docs/方案.md`（v2.0 定稿，含用户决策 D1–D6）；调研报告：`docs/research/01/02/03`
 
 ## 功能路线
@@ -12,8 +12,8 @@ DeepSeek Harness 多租户插件：把 DSH 从"本地单用户开发工具"扩�
 | M1 | 工程骨架 + 认证反代网关（HTTP/WS 代理、cookie 会话）+ bootstrap 平台管理员 + DB 层 | ✅ 完成 |
 | M2 | 多租户 + RBAC：/mt 管理通道、租户/用户/角色管理 API、会话归属前缀强制、管理控制台 UI | ✅ 完成 |
 | M3 | 用量统计（token 四桶）+ 配额（同步检查 + 周期累计）+ 用量/配额 UI | ✅ 完成 |
-| M4 | 审计日志 + 审计员视图 + CSV 导出 + 强制下线 | ⏳ 待开发 |
-| M5 | LDAP 登录（ldapts） | ⏳ |
+| M4 | 审计日志（查询/CSV 导出/登录失败留痕）+ 审计员视图 + 强制下线 | ✅ 完成 |
+| M5 | LDAP 登录（ldapts） | ⏳ 待开发 |
 | M6 | SSO/OIDC 登录（openid-client） | ⏳ |
 | M7 | 硬化 + 交付（防爆破细化、TLS/反代文档、打包） | ⏳ |
 
@@ -118,8 +118,10 @@ ln -sfn /Users/robinddu/Desktop/workspace/robinddu/dsh-multi-tenant \
 | `usage.summary` / `usage.sessions` | 用量统计（汇总/按用户/会话明细，period: day/month/all） | auditor+（租户内），user 仅本人 |
 | `quota.view` | 配额视图（本人/指定用户/指定租户） | 任意已登录（他人需 admin+） |
 | `quota.set` / `quota.clear` | 设置/清除配额（scope: platform/tenant/user，period: daily/monthly/total） | admin+（platform 需 system） |
+| `audit.list` / `audit.export` | 审计日志查询/CSV 导出（可按 action/result 过滤） | auditor+（租户内只读），system 全局 |
+| `user.revokeSessions` | 强制下线（吊销该用户全部会话） | admin+（租户内），本人亦可 |
 
-管理控制台 UI（浏览器）：设置面板新增页签 **个人中心 / 用户管理 / 租户管理 / 用量统计 / 配额**（按角色可见）。
+管理控制台 UI（浏览器）：设置面板新增页签 **个人中心 / 用户管理 / 租户管理 / 用量统计 / 配额 / 审计日志**（按角色可见）。
 
 ## 用量统计与配额（M3）
 
@@ -130,6 +132,14 @@ ln -sfn /Users/robinddu/Desktop/workspace/robinddu/dsh-multi-tenant \
   `session.prompt`/`subagent.prompt`（网关前置检查，返回 `quota-exhausted` 业务错误）；
   周期窗口自动滚动
 - **视图**：用量仪表盘（今日/本月/累计 + 按用户 + 会话明细）、个人配额剩余、配额管理
+
+## 审计日志（M4）
+
+- **留痕**：登录（成功/失败原因）、登出、bootstrap、改密、租户/用户/配额全部管理操作、
+  会话越权（session.denied）、配额拒绝（quota.denied）——`audit_logs` 只追加不可改删
+- **查询**：`audit.list`（action/result/用户/时间过滤 + 分页）；**导出**：`audit.export`（CSV，UTF-8 BOM）
+- **审计员角色**：租户内只读查询与导出；使用者无审计权限；平台管理员全局可查
+- **强制下线**：`user.revokeSessions` 吊销指定用户全部会话（启停账号时同样即时失效会话）
 
 ## 开发
 

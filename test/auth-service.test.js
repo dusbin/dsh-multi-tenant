@@ -109,3 +109,18 @@ test('authenticateByCookie rejects unknown tokens and inactive users', () => {
   store.setUserStatus(boot.user.id, 'disabled');
   assert.equal(svc.authenticateByCookie(cookie), null);
 });
+
+test('login failures are audited (denied)', () => {
+  const { db, store, svc } = setup();
+  svc.bootstrap({ username: 'admin', password: 'longenough-password' });
+  const wrong = svc.login({ username: 'admin', password: 'wrong-password', ip: '10.0.0.1' });
+  assert.equal(wrong.ok, false);
+  const denied = store.listAudit({ action: 'auth.login', result: 'denied' });
+  assert.equal(denied.length, 1);
+  assert.equal(denied[0].detail, JSON.stringify({ reason: 'invalid-credentials', userId: 1 }));
+  // 成功登录也审计
+  svc.login({ username: 'admin', password: 'longenough-password' });
+  const ok = store.listAudit({ action: 'auth.login', result: 'success' });
+  assert.equal(ok.length, 1);
+  db.close();
+});

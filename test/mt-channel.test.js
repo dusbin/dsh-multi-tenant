@@ -158,3 +158,72 @@ test('mt: auth.changePassword verifies old password', () => {
   assert.equal(ok.ok, true);
   assert.equal(ok.value.changed, true);
 });
+
+// ---------------------------------------------------------------------------
+// M4：审计 + 强制下线
+// ---------------------------------------------------------------------------
+test('mt: audit.list RBAC — auditor within tenant, user forbidden, system global', () => {
+  const { mt, store, a, b, c, d } = setup();
+  // 产生若干审计记录（含跨租户）
+  const t1 = store.getTenantByName('acme').id;
+  const t2 = store.getTenantByName('globex').id;
+  store.writeAudit({ actorUserId: a.id, tenantId: t1, action: 'user.create', result: 'success' });
+  store.writeAudit({ actorUserId: d.id, tenantId: t2, action: 'user.delete', result: 'denied' });
+
+  const asAuditor = { user: store.getUserById(c.id) }; // carol = auditor in acme
+  const r = mt.dispatch('audit.list', {}, asAuditor);
+  assert.equal(r.ok, true);
+  assert.equal(r.value.entries.length, 1); // 只看到租户 1
+  assert.equal(r.value.entries[0].action, 'user.create');
+
+  // user 角色被拒
+  const asUser = { user: store.getUserById(b.id) };
+  assert.equal(mt.dispatch('audit.list', {}, asUser).error.code, 'forbidden');
+
+  // system 全局可见两条
+  const sys = { user: store.getUserById(store.getUserByUsername('root').id) };
+  const sysR = mt.dispatch('audit.list', {}, sys);
+  assert.equal(sysR.value.entries.length >= 2, true);
+
+  // 越权指定他租户 → forbidden
+  const cross = mt.dispatch('audit.list', { tenantId: t2 }, asAuditor);
+  assert.equal(cross.error.code, 'forbidden');
+});
+
+test('mt: audit.export returns CSV and honors scope', () => {
+  const { mt, store, c, d } = setup();
+  const t1 = store.getTenantByName('acme').id;
+  const t2 = store.getTenantByName('globex').id;
+  store.writeAudit({ actorUserId: c.id, tenantId: t1, action: 'auth.login', result: 'success' });
+  store.writeAudit({ actorUserId: d.id, tenantId: t2, action: 'quota.set', detail: { x: 'a,"b"' }, result: 'success' });
+
+  const asAuditor = { user: store.getUserById(c.id) };
+  const r = mt.dispatch('audit.export', {}, asAuditor);
+  assert.equal(r.ok, true);
+  assert.match(r.value.csv, /^ts,actor_user_id/);
+  assert.match(r.value.csv, /auth\.login/);
+  assert.doesNotMatch(r.value.csv, /quota\.set/); // 跨租户记录不出现在租户 1 导出
+  assert.match(r.value.filename, /\.csv$/);
+});
+
+test('mt: user.revokeSessions force-logout', () => {
+  const { mt, store, a, b } = setup();
+  // 给 bob 两个会话
+  store.createSession({ userId: b.id, tokenHash: 'r1', expiresAt: Date.now() + 10000 });
+  store.createSession({ userId: b.id, tokenHash: 'r2', expiresAt: Date.now() + 10000 });
+  const asAdmin = { user: store.getUserById(a.id) };
+  const r = mt.dispatch('user.revokeSessions', { userId: b.id }, asAdmin);
+  assert.equal(r.ok, true);
+  assert.equal(r.value.revoked, true);
+  assert.equal(store.getSessionByTokenHash('r1'), undefined);
+  assert.equal(store.getSessionByTokenHash('r2'), undefined);
+  // 审计留痕
+  const logs = store.listAudit({ action: 'user.revoke-sessions' });
+  assert.equal(logs.length, 1);
+  // 无权限（auditor 不能强制下线他人）
+  const carol = store.getUserByUsername('carol');
+  const asAuditor = { user: carol };
+  store.createSession({ userId: b.id, tokenHash: 'r3', expiresAt: Date.now() + 10000 });
+  const denied = mt.dispatch('user.revokeSessions', { userId: b.id }, asAuditor);
+  assert.equal(denied.error.code, 'forbidden');
+});
