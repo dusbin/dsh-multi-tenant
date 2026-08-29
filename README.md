@@ -2,7 +2,7 @@
 
 DeepSeek Harness 多租户插件：把 DSH 从"本地单用户开发工具"扩展为**多租户、多角色、可登录、可计量、可审计**的服务形态。
 
-> 状态：**M5 完成**（LDAP 登录；M1-M4 已完成）
+> 状态：**M6 完成**（SSO/OIDC 登录；M1-M5 已完成）
 > 方案文档：`docs/方案.md`（v2.0 定稿，含用户决策 D1–D6）；调研报告：`docs/research/01/02/03`
 
 ## 功能路线
@@ -14,8 +14,8 @@ DeepSeek Harness 多租户插件：把 DSH 从"本地单用户开发工具"扩�
 | M3 | 用量统计（token 四桶）+ 配额（同步检查 + 周期累计）+ 用量/配额 UI | ✅ 完成 |
 | M4 | 审计日志（查询/CSV 导出/登录失败留痕）+ 审计员视图 + 强制下线 | ✅ 完成 |
 | M5 | LDAP 登录（ldapts，目录绑定验证 + 自动建号） | ✅ 完成 |
-| M6 | SSO/OIDC 登录（openid-client） | ⏳ 待开发 |
-| M7 | 硬化 + 交付（防爆破细化、TLS/反代文档、打包） | ⏳ |
+| M6 | SSO/OIDC 登录（openid-client，Authorization Code + PKCE） | ✅ 完成 |
+| M7 | 硬化 + 交付（防爆破细化、TLS/反代文档、打包） | ⏳ 待开发 |
 
 ## 架构一句话
 
@@ -162,6 +162,29 @@ ln -sfn /Users/robinddu/Desktop/workspace/robinddu/dsh-multi-tenant \
 - 认证流程：服务账号 bind → 按过滤器搜索用户 → **以用户 DN + 密码绑定**（标准 LDAP 密码校验）
 - 目录凭据错误 → `invalid-credentials`；目录不可达 → `ldap-unavailable`（不泄漏目录细节）
 - LDAP 登录同样受防爆破与审计；禁用/锁定账号即时生效
+
+## SSO / OIDC 登录（M6）
+
+登录页按 `me` 返回的 `methods` 渲染 **SSO 登录** 按钮（含 `oidc` 时）：
+点击 → `/api/auth/oidc/start` 返回 IdP 授权 URL → IdP 登录 → 302 回
+`/api/auth/oidc/callback` → 网关换令牌（PKCE）并校验 ID token（签名/iss/aud/exp）→
+Set-Cookie + 302 回原目标。
+
+| 配置键（`auth.oidc.*`） | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `false` | 启用 OIDC |
+| `issuerUrl` | — | OIDC 发现端点（自动获取 JWKS/端点） |
+| `clientId` / `clientSecret` | — | 客户端凭据 |
+| `publicBaseUrl` | 空 | 对外基址（redirect_uri 用；空 = 取请求 Host / X-Forwarded-Proto） |
+| `redirectPath` | `/api/auth/oidc/callback` | 回调路径 |
+| `scopes` | `openid profile email` | 请求的 scope |
+| `claimsMapping` | `{subject:'sub', username:'preferred_username', email:'email'}` | ID token 声明 → 本地字段 |
+| `autoProvision` | `true` | 首次登录自动建号（按 `oidc_sub` 关联） |
+| `defaultTenantId` / `defaultRole` | `null` / `user` | 自动建号归属 |
+
+- 认证流程：Authorization Code + PKCE（state 内存 TTL）；openid-client 校验 ID token 签名与 issuer/audience
+- state 失效/换令牌失败/无 subject → 明确错误码，302 回 `/?mt_error=<code>` 并记审计
+- SSO 登录同样受禁用/锁定账号即时校验
 
 ## 开发
 

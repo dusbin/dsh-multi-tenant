@@ -362,3 +362,64 @@ test('gateway: quota exhaustion blocks session.prompt with envelope error', asyn
   assert.equal(blocked.body.result.ok, false);
   assert.equal(blocked.body.result.error.code, 'quota-exhausted');
 });
+
+// ---------------------------------------------------------------------------
+// M6：OIDC 端点（start 返回授权 URL；callback 换令牌 + Set-Cookie + 302）
+// ---------------------------------------------------------------------------
+test('gateway: oidc start/callback flow', async (t) => {
+  const target = await startTarget();
+  const targetPort = target.address().port;
+  const db = openMemoryDatabase();
+  const store = createStore(db);
+  const cfg = resolveConfig({ gateway: { port: 0 } });
+  const authService = createAuthService(store, cfg);
+
+  // 假 OIDC 策略：start 生成 URL；callback 返回已建号用户
+  const oidcStrategy = {
+    enabled: true,
+    start: async ({ redirectTo, baseUrl }) => ({
+      url: `https://idp.example.com/authorize?state=abc&redirect=${encodeURIComponent(redirectTo)}&base=${encodeURIComponent(baseUrl)}`,
+    }),
+    handleCallback: async ({ code, state }) => {
+      if (state !== 'abc') return { ok: false, error: { code: 'oidc-invalid-state', message: 'bad state' } };
+      const uid = store.createUser({ username: 'sso.user', oidcSub: 'sub-1', role: 'user' });
+      return { ok: true, user: store.getUserById(uid), redirectTo: '/' };
+    },
+  };
+  const gateway = createGateway({ cfg, target: { hostname: '127.0.0.1', port: targetPort }, authService, oidcStrategy, logger: { warn() {}, info() {} } });
+  const port = await listenGateway(gateway);
+  t.after(async () => {
+    await gateway.close();
+    await new Promise((resolve) => target.close(resolve));
+    db.close();
+  });
+
+  // start → 授权 URL
+  const start = await httpJson(port, '/api/auth/oidc/start?redirect=%2Fconsole');
+  assert.equal(start.status, 200);
+  assert.equal(start.body.ok, true);
+  assert.match(start.body.url, /^https:\/\/idp\.example\.com\/authorize/);
+
+  // callback → 302 + Set-Cookie（浏览器导航流程）
+  const cb = await httpJson(port, '/api/auth/oidc/callback?code=c1&state=abc');
+  assert.equal(cb.status, 302);
+  assert.equal(cb.headers.location, '/');
+  const cookie = /mt_session=([^;]+)/.exec(cb.headers['set-cookie'][0]);
+  assert.ok(cookie);
+  // 会话已建立
+  const me = await httpJson(port, '/api/auth/me', { cookie: `mt_session=${cookie[1]}` });
+  assert.equal(me.body.user.username, 'sso.user');
+
+  // 非法 state → 302 到 /?mt_error=
+  const bad = await httpJson(port, '/api/auth/oidc/callback?code=c2&state=forged');
+  assert.equal(bad.status, 302);
+  assert.match(bad.headers.location, /mt_error=oidc-invalid-state/);
+
+  // 未启用时 404
+  const gw2cfg = resolveConfig({ gateway: { port: 0 } });
+  const gw2 = createGateway({ cfg: gw2cfg, target: { hostname: '127.0.0.1', port: targetPort }, authService, logger: { warn() {}, info() {} } });
+  const port2 = await listenGateway(gw2);
+  const noOidc = await httpJson(port2, '/api/auth/oidc/start');
+  assert.equal(noOidc.status, 404);
+  await gw2.close();
+});
