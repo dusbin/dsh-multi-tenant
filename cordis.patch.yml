@@ -1,0 +1,41 @@
+# dsh-multi-tenant bundle patch.
+#
+# 通过 `dsh plugin --profile web add dsh-multi-tenant` 安装时，本 patch 作为
+# bundle 层自动应用，插入插件行；手动安装（软链 + patch 行）时把下面这段
+# insert 复制到 profile 的 cordis.patch.yml 即可。
+#
+# 覆盖本行的配置：在 profile 的 cordis.patch.yml 里按 id 定位整行替换 config。
+# 例如只改网关端口：
+#   - id: multi-tenant
+#     config:
+#       gateway:
+#         enabled: true
+#         host: '0.0.0.0'
+#         port: 8443
+
+- insert:
+    - id: multi-tenant
+      name: 'dsh-multi-tenant'
+      config:
+        # 认证反代网关：DSH 本体保持 loopback 绑定，网关是唯一对外入口。
+        gateway:
+          enabled: true
+          host: '0.0.0.0'
+          port: 3090
+        # 登录会话 Cookie（HttpOnly；公网 HTTPS 部署请把 secure 置 true）
+        cookie:
+          name: 'mt_session'
+          maxAgeDays: 14
+          secure: false
+          sameSite: 'Lax'
+        # 数据目录（node:sqlite）
+        db:
+          path: !!js dshHomePath('multi-tenant', 'mt.db')
+        # 认证策略
+        auth:
+          local:
+            enabled: true
+            maxFailedAttempts: 5
+            lockWindowMs: 900000
+          bootstrap:
+            enabled: true

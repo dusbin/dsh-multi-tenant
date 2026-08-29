@@ -1,0 +1,46 @@
+{
+  "name": "dsh-multi-tenant",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 多租户插件：认证反代网关（邮箱密码/LDAP/SSO）、角色权限（平台管理员/租户管理员/审计员/使用者）、token 配额与用量统计、审计日志",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "license": "MIT",
+  "keywords": [
+    "deepseek-harness",
+    "plugin",
+    "multi-tenant",
+    "auth",
+    "rbac",
+    "quota",
+    "audit"
+  ]
+}
