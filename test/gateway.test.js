@@ -104,7 +104,27 @@ function startTarget() {
       req.on('data', (c) => { body += c; });
       req.on('end', () => {
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ echoed: JSON.parse(body || '{}'), host: req.headers.host }));
+        res.end(JSON.stringify({ echoed: JSON.parse(body || '{}'), host: req.headers.host, origin: req.headers.origin }));
+      });
+      return;
+    }
+    // 模拟 DSH 特权方法信任栅栏：请求带 Origin 时要求 Origin.host === Host，否则 403
+    if (req.method === 'POST' && req.url === '/api/host.pickDirectory') {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        const origin = req.headers.origin;
+        const sameOrigin = origin === undefined || (() => {
+          try { return new URL(origin).host === req.headers.host; } catch { return false; }
+        })();
+        if (!sameOrigin) {
+          res.writeHead(403);
+          res.end('forbidden');
+          return;
+        }
+        const env = JSON.parse(body || '{}');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ type: 'server-response', rpcId: env.rpcId, result: { ok: true, value: { path: '/tmp' } } }));
       });
       return;
     }
@@ -154,9 +174,9 @@ function listenGateway(gateway) {
   });
 }
 
-function httpJson(port, path, { method = 'GET', body, cookie } = {}) {
+function httpJson(port, path, { method = 'GET', body, cookie, headers: extraHeaders } = {}) {
   return new Promise((resolve, reject) => {
-    const headers = { 'content-type': 'application/json' };
+    const headers = { 'content-type': 'application/json', ...extraHeaders };
     if (cookie) headers.cookie = cookie;
     const req = http.request(
       { hostname: '127.0.0.1', port, path, method, headers, agent: false },
@@ -183,7 +203,7 @@ function extractCookieToken(setCookieHeader) {
 }
 
 /** 最小 WS 测试客户端：连接 + 发文本帧 + 等待 echo。 */
-function wsTestClient(port, path, { cookie } = {}) {
+function wsTestClient(port, path, { cookie, origin } = {}) {
   return new Promise((resolve, reject) => {
     const key = crypto.randomBytes(16).toString('base64');
     const headers = {
@@ -193,6 +213,7 @@ function wsTestClient(port, path, { cookie } = {}) {
       'sec-websocket-version': '13',
     };
     if (cookie) headers.cookie = cookie;
+    if (origin) headers.origin = origin;
     const req = http.request({ hostname: '127.0.0.1', port, path, headers, agent: false });
     req.on('upgrade', (res, socket) => {
       if (res.statusCode !== 101) {
@@ -721,4 +742,93 @@ test('gateway: WS downlink drops invisible workspace/session frames', async (t) 
   const ws = await collect(`mt_session=${token}`);
   // 3 帧中只应收到可见工作区 w1；w2 与他租户 session-added 被网关丢弃
   assert.deepEqual(ws, ['host/workspace-changed']);
+});
+
+// ---------------------------------------------------------------------------
+// 浏览器信任头规范化：Origin 改写为 loopback 目标源
+// （DSH 侧 /api 信任栅栏要求 Origin.host === Host；不改写则特权方法 403、
+//  WS 握手被拒 —— 修复 "添加工作区 → 打开文件夹" transport failure 403）
+// ---------------------------------------------------------------------------
+test('gateway: rewrites Origin to loopback target so privileged methods and WS pass DSH trust fence', async (t) => {
+  const target = await startTarget();
+  const targetPort = target.address().port;
+
+  const db = openMemoryDatabase();
+  const store = createStore(db);
+  const cfg = resolveConfig({ gateway: { port: 0 } });
+  const authService = createAuthService(store, cfg);
+  const gateway = createGateway({ cfg, target: { hostname: '127.0.0.1', port: targetPort }, authService, logger: { warn() {}, info() {} } });
+  const port = await listenGateway(gateway);
+
+  t.after(async () => {
+    await gateway.close();
+    await new Promise((resolve) => target.close(resolve));
+    db.close();
+  });
+
+  const boot = await httpJson(port, '/api/auth/bootstrap', { method: 'POST', body: { username: 'admin', password: 'longenough-password' } });
+  const cookie = `mt_session=${extractCookieToken(boot.headers['set-cookie'])}`;
+
+  // 1) 特权方法（host.pickDirectory）：带浏览器形态 Origin（网关端口）→ 必须 200
+  //    （修复前：DSH 侧栅栏见 Origin 127.0.0.1:<port> ≠ Host 127.0.0.1:<targetPort> → 403）
+  const picked = await httpJson(port, '/api/host.pickDirectory', {
+    method: 'POST',
+    cookie,
+    headers: { origin: `http://127.0.0.1:${port}` },
+    body: { type: 'client-request', rpcId: 'p', method: 'host.pickDirectory', payload: {} },
+  });
+  assert.equal(picked.status, 200);
+  assert.equal(picked.body.result.ok, true);
+
+  // 2) 目标收到的 Origin 被改写为 loopback 目标源（与转发 Host 一致）
+  const echo = await httpJson(port, '/api/echo', {
+    method: 'POST',
+    cookie,
+    headers: { origin: `http://127.0.0.1:${port}` },
+    body: { hello: 'world' },
+  });
+  assert.equal(echo.status, 200);
+  assert.equal(echo.body.origin, `http://127.0.0.1:${targetPort}`);
+  assert.equal(echo.body.host, `127.0.0.1:${targetPort}`);
+
+  // 3) 无 Origin 的请求照常放行（origin 缺省时 DSH 栅栏直接放行）
+  const plain = await httpJson(port, '/api/host.pickDirectory', {
+    method: 'POST',
+    cookie,
+    body: { type: 'client-request', rpcId: 'p2', method: 'host.pickDirectory', payload: {} },
+  });
+  assert.equal(plain.status, 200);
+
+  // 4) WS 握手带浏览器 Origin → 必须 101（修复前：DSH 栅栏拒绝握手）
+  const ws = await wsTestClient(port, '/api/events.mux', { cookie, origin: `http://127.0.0.1:${port}` });
+  ws.sendText('ping');
+  assert.equal(await ws.waitEcho(), 'ping');
+  ws.close();
+
+  // 5) 配置/凭据面门禁：非平台管理员（user 角色）调 settings.describe → 网关 403；
+  //    但 host.pickDirectory（工作区创建流程）放行
+  const { hashSessionToken } = await import('../lib/host/crypto.js');
+  const tid = store.createTenant({ name: 't-gate' });
+  const uid = store.createUser({ tenantId: tid, username: 'plain.user', role: 'user' });
+  const userToken = `t-user-${Math.random().toString(36).slice(2)}`;
+  store.createSession({ userId: uid, tokenHash: hashSessionToken(userToken), expiresAt: Date.now() + 10000 });
+  const userCookie = `mt_session=${userToken}`;
+
+  const deniedSettings = await httpJson(port, '/api/settings.describe', {
+    method: 'POST',
+    cookie: userCookie,
+    headers: { origin: `http://127.0.0.1:${port}` },
+    body: { type: 'client-request', rpcId: 's', method: 'settings.describe', payload: {} },
+  });
+  assert.equal(deniedSettings.status, 403);
+  assert.equal(deniedSettings.body.error.code, 'forbidden');
+
+  const allowedPick = await httpJson(port, '/api/host.pickDirectory', {
+    method: 'POST',
+    cookie: userCookie,
+    headers: { origin: `http://127.0.0.1:${port}` },
+    body: { type: 'client-request', rpcId: 'p3', method: 'host.pickDirectory', payload: {} },
+  });
+  assert.equal(allowedPick.status, 200);
+  assert.equal(allowedPick.body.result.ok, true);
 });

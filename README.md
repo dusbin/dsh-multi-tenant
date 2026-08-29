@@ -266,7 +266,9 @@ curl http://127.0.0.1:3990/api/auth/me     # bootstrapRequired → bootstrap →
 - 登录会话为 `HttpOnly + SameSite=Lax` Cookie；公网部署务必 `cookie.secure: true` + 反代 TLS
 - 防爆破：每账号+每 IP 窗口内失败计数，连续失败达阈值**自动锁定账号**（管理员解锁清计数）；网关统一安全响应头（nosniff/DENY/CSP）
 - 部署形态（内网直连 + 公网反代 TLS）与备份/升级见 **`docs/部署.md`**
-- `settings.*`/`credentials.*` 等 DSH 特权方法对远程用户恒 403（DSH 原有限制），多租户场景符合预期
+- DSH 特权方法经网关：网关做浏览器信任头规范化（Origin→回环源）后，配置/凭据面
+  （`settings.*`/`credentials.*`/`llm.discoverModels`）**仅平台管理员**可调；`host.pickDirectory`
+  /`host.openPath`（工作区创建流程）对所有已登录用户放行；3080 直连仍为 loopback 语义
 
 ## License
 
