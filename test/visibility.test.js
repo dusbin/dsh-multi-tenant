@@ -54,11 +54,15 @@ test('filterListValue: session.list / session.search / workspace.list', () => {
   // search 同构
   const search = filterListValue('session.search', { items: items.map((i) => ({ sessionId: i.sessionId, snippet: 'x' })) }, admin);
   assert.equal(search.items.length, 2);
-  // workspace.list 数组形态
-  const ws = filterListValue('workspace.list', [
-    { workspaceId: 'w1', sessionIds: ['u-2-t-10-s-a'] },
-    { workspaceId: 'w2', sessionIds: ['u-5-t-20-s-b'] },
-  ], admin);
-  assert.equal(ws.length, 1);
-  assert.equal(ws[0].workspaceId, 'w1');
+  // workspace.list 真实形状 {items, archivedSessionIds}
+  const ws = filterListValue('workspace.list', {
+    items: [
+      { workspaceId: 'w1', sessionIds: ['u-2-t-10-s-a'] },
+      { workspaceId: 'w2', sessionIds: ['u-5-t-20-s-b'] },
+    ],
+    archivedSessionIds: ['u-2-t-10-s-old', 'u-5-t-20-s-old'],
+  }, admin);
+  assert.equal(ws.items.length, 1);
+  assert.equal(ws.items[0].workspaceId, 'w1');
+  assert.deepEqual(ws.archivedSessionIds, ['u-2-t-10-s-old']);
 });

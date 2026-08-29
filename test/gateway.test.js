@@ -575,10 +575,10 @@ test('gateway: list endpoints filtered by tenant visibility', async (t) => {
     if (req.method === 'POST' && req.url === '/api/workspace.list') {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({
-        type: 'server-response', rpcId: 'w', result: { ok: true, value: { workspaces: [
+        type: 'server-response', rpcId: 'w', result: { ok: true, value: { items: [
           { workspaceId: 'w1', title: 'x', sessionIds: [aliceSid] },
           { workspaceId: 'w2', title: 'y', sessionIds: [daveSid] },
-        ] } },
+        ], archivedSessionIds: [] } },
       }));
       return;
     }
@@ -622,7 +622,7 @@ test('gateway: list endpoints filtered by tenant visibility', async (t) => {
       method: 'POST', cookie,
       body: { type: 'client-request', rpcId: 'x', method: 'workspace.list', payload: {} },
     });
-    return (r.body.result.value.workspaces || []).map((w) => w.workspaceId);
+    return (r.body.result.value.items || []).map((w) => w.workspaceId);
   };
 
   // 平台管理员：全部
