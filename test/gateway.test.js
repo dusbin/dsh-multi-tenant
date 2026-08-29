@@ -451,3 +451,49 @@ test('gateway: security headers on responses', async (t) => {
   const me = await httpJson(port, '/api/auth/me');
   assert.equal(me.headers['x-content-type-options'], 'nosniff');
 });
+
+// ---------------------------------------------------------------------------
+// DSH 侧认证路由（直连 DSH 端口也可登录）
+// ---------------------------------------------------------------------------
+test('wireAuthRoutes: /api/auth works on DSH webserver side', async (t) => {
+  const db = openMemoryDatabase();
+  const store = createStore(db);
+  const cfg = resolveConfig({});
+  const authService = createAuthService(store, cfg);
+  const { createAuthRouter, wireAuthRoutes } = await import('../lib/host/auth-router.js');
+  const router = createAuthRouter({ cfg, authService, logger: { warn() {}, info() {} } });
+  let captured = null;
+  const fakeCtx = {
+    webServer: { register(route) { captured = route; } },
+    logger: { warn() {}, info() {} },
+  };
+  wireAuthRoutes(fakeCtx, router);
+  assert.equal(captured.kind, 'prefix');
+  assert.equal(captured.path, '/api/auth');
+
+  // 用真实 http server 跑捕获的路由
+  const server = http.createServer((req, res) => captured.handler(req, res));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  // me（未初始化）→ bootstrapRequired
+  const me = await httpJson(port, '/api/auth/me');
+  assert.equal(me.status, 200);
+  assert.equal(me.body.bootstrapRequired, true);
+
+  // bootstrap → 201 + cookie
+  const boot = await httpJson(port, '/api/auth/bootstrap', { method: 'POST', body: { username: 'admin', password: 'longenough-password' } });
+  assert.equal(boot.status, 201);
+  const cookie = `mt_session=${extractCookieToken(boot.headers['set-cookie'])}`;
+
+  // 已登录 me
+  const me2 = await httpJson(port, '/api/auth/me', { cookie });
+  assert.equal(me2.body.user.username, 'admin');
+
+  // 登出 → 失效
+  await httpJson(port, '/api/auth/logout', { method: 'POST', cookie });
+  const me3 = await httpJson(port, '/api/auth/me', { cookie });
+  assert.equal(me3.status, 401);
+  db.close();
+});
