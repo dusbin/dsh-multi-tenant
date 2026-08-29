@@ -260,3 +260,23 @@ test('mt: system user.create without tenantId returns tenant-required; errors ca
   assert.equal(denied.ok, false);
   assert.deepEqual(denied.error.details, {});
 });
+
+test('mt: cannot disable or force-logout yourself', () => {
+  const { mt, store, a, sys } = setup();
+  // 租户管理员：不能禁用/强制下线自己
+  const asAdmin = { user: store.getUserById(a.id) };
+  const selfDisable = mt.dispatch('user.setStatus', { userId: a.id, status: 'disabled' }, asAdmin);
+  assert.equal(selfDisable.ok, false);
+  assert.equal(selfDisable.error.code, 'self-operation');
+  const selfRevoke = mt.dispatch('user.revokeSessions', { userId: a.id }, asAdmin);
+  assert.equal(selfRevoke.ok, false);
+  assert.equal(selfRevoke.error.code, 'self-operation');
+  // 平台管理员：同样不能对自己操作
+  const asSys = { user: store.getUserById(sys.user.id) };
+  const sysSelf = mt.dispatch('user.revokeSessions', { userId: sys.user.id }, asSys);
+  assert.equal(sysSelf.ok, false);
+  assert.equal(sysSelf.error.code, 'self-operation');
+  // 仍然可以管理他人
+  const others = mt.dispatch('user.revokeSessions', { userId: store.getUserByUsername('bob').id }, asAdmin);
+  assert.equal(others.ok, true);
+});
