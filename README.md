@@ -2,7 +2,7 @@
 
 DeepSeek Harness 多租户插件：把 DSH 从"本地单用户开发工具"扩展为**多租户、多角色、可登录、可计量、可审计**的服务形态。
 
-> 状态：**M2 完成**（多租户 + RBAC + 管理控制台；M1 认证反代网关 + 登录 + bootstrap + SQLite 已在前一里程碑完成并冒烟验证）
+> 状态：**M3 完成**（用量统计 + 配额；M1 网关/登录、M2 多租户/RBAC 已在前序里程碑完成）
 > 方案文档：`docs/方案.md`（v2.0 定稿，含用户决策 D1–D6）；调研报告：`docs/research/01/02/03`
 
 ## 功能路线
@@ -11,8 +11,8 @@ DeepSeek Harness 多租户插件：把 DSH 从"本地单用户开发工具"扩�
 |---|---|---|
 | M1 | 工程骨架 + 认证反代网关（HTTP/WS 代理、cookie 会话）+ bootstrap 平台管理员 + DB 层 | ✅ 完成 |
 | M2 | 多租户 + RBAC：/mt 管理通道、租户/用户/角色管理 API、会话归属前缀强制、管理控制台 UI | ✅ 完成 |
-| M3 | 用量统计（token 四桶）+ 配额（同步检查 + 周期累计）+ 个人中心 | ⏳ 待开发 |
-| M4 | 审计日志 + 审计员视图 + CSV 导出 + 强制下线 | ⏳ |
+| M3 | 用量统计（token 四桶）+ 配额（同步检查 + 周期累计）+ 用量/配额 UI | ✅ 完成 |
+| M4 | 审计日志 + 审计员视图 + CSV 导出 + 强制下线 | ⏳ 待开发 |
 | M5 | LDAP 登录（ldapts） | ⏳ |
 | M6 | SSO/OIDC 登录（openid-client） | ⏳ |
 | M7 | 硬化 + 交付（防爆破细化、TLS/反代文档、打包） | ⏳ |
@@ -115,8 +115,21 @@ ln -sfn /Users/robinddu/Desktop/workspace/robinddu/dsh-multi-tenant \
 | `tenant.list` / `tenant.create` / `tenant.setStatus` | 租户管理 | system |
 | `user.list` | 用户列表（本租户） | admin+ |
 | `user.create` / `user.setStatus` / `user.setRole` / `user.setPassword` / `user.delete` | 用户管理 | admin+（租户内） |
+| `usage.summary` / `usage.sessions` | 用量统计（汇总/按用户/会话明细，period: day/month/all） | auditor+（租户内），user 仅本人 |
+| `quota.view` | 配额视图（本人/指定用户/指定租户） | 任意已登录（他人需 admin+） |
+| `quota.set` / `quota.clear` | 设置/清除配额（scope: platform/tenant/user，period: daily/monthly/total） | admin+（platform 需 system） |
 
-管理控制台 UI（浏览器）：设置面板新增页签 **个人中心 / 用户管理 / 租户管理**（按角色可见）。
+管理控制台 UI（浏览器）：设置面板新增页签 **个人中心 / 用户管理 / 租户管理 / 用量统计 / 配额**（按角色可见）。
+
+## 用量统计与配额（M3）
+
+- **计量**：`tokenUsage` 会话投影（web profile 已组合 dsh-token-meter）四桶
+  `{uncachedInput, output, cacheRead, cacheWrite}`；插件按会话前缀归属，差分记账到
+  `usage_records`（首见只建基线，恢复的旧会话不重复计费；压缩/失败请求由投影正确处理）
+- **配额**：平台/租户/用户 三级 × 日/月/累计 周期，任一适用限额达到即拒绝新的
+  `session.prompt`/`subagent.prompt`（网关前置检查，返回 `quota-exhausted` 业务错误）；
+  周期窗口自动滚动
+- **视图**：用量仪表盘（今日/本月/累计 + 按用户 + 会话明细）、个人配额剩余、配额管理
 
 ## 开发
 

@@ -108,6 +108,16 @@ function startTarget() {
       });
       return;
     }
+    if (req.method === 'POST' && req.url === '/api/session.prompt') {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        const env = JSON.parse(body || '{}');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ type: 'server-response', rpcId: env.rpcId, result: { ok: true, value: { accepted: true } } }));
+      });
+      return;
+    }
     res.writeHead(404);
     res.end('not found');
   });
@@ -299,4 +309,56 @@ test('gateway: static pass-through, /api gating, auth flow, proxy, WS', async (t
   const echoed = await ws.waitEcho();
   assert.equal(echoed, 'ping-from-browser');
   ws.close();
+});
+
+// ---------------------------------------------------------------------------
+// M3：配额门禁（session.prompt 前置检查）
+// ---------------------------------------------------------------------------
+test('gateway: quota exhaustion blocks session.prompt with envelope error', async (t) => {
+  const target = await startTarget();
+  const targetPort = target.address().port;
+
+  const db = openMemoryDatabase();
+  const store = createStore(db);
+  const cfg = resolveConfig({ gateway: { port: 0 } });
+  const authService = createAuthService(store, cfg);
+  const { createQuotaService } = await import('../lib/host/quota.js');
+  const quotaService = createQuotaService(store);
+  const gateway = createGateway({ cfg, target: { hostname: '127.0.0.1', port: targetPort }, authService, quotaService, logger: { warn() {}, info() {} } });
+  const port = await listenGateway(gateway);
+
+  t.after(async () => {
+    await gateway.close();
+    await new Promise((resolve) => target.close(resolve));
+    db.close();
+  });
+
+  // bootstrap + 设置用户月配额 100
+  const boot = await httpJson(port, '/api/auth/bootstrap', { method: 'POST', body: { username: 'admin', password: 'longenough-password' } });
+  const cookie = `mt_session=${extractCookieToken(boot.headers['set-cookie'])}`;
+  const user = store.getUserById(boot.body.user.id);
+  store.upsertQuota({ scope: 'user', targetId: user.id, tokenLimit: 100, period: 'monthly' });
+
+  // 未超限：session.prompt 被代理（目标回 200）
+  const okPrompt = await httpJson(port, '/api/session.prompt', {
+    method: 'POST',
+    cookie,
+    body: { type: 'client-request', rpcId: 'q1', method: 'session.prompt', payload: { sessionId: `u-${user.id}-t-sys-s-abc`, text: 'hi' } },
+  });
+  assert.equal(okPrompt.status, 200);
+  assert.equal(okPrompt.body.result.ok, true); // 目标 echo 了 ok:true
+
+  // 配额用满
+  quotaService.addUsage(user, 100);
+
+  // 超限：网关拦截，返回信封业务错误（HTTP 200 + quota-exhausted）
+  const blocked = await httpJson(port, '/api/session.prompt', {
+    method: 'POST',
+    cookie,
+    body: { type: 'client-request', rpcId: 'q2', method: 'session.prompt', payload: { sessionId: `u-${user.id}-t-sys-s-abc`, text: 'hi' } },
+  });
+  assert.equal(blocked.status, 200);
+  assert.equal(blocked.body.type, 'server-response');
+  assert.equal(blocked.body.result.ok, false);
+  assert.equal(blocked.body.result.error.code, 'quota-exhausted');
 });

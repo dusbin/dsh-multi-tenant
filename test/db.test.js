@@ -6,7 +6,7 @@ import { hashPassword } from '../lib/host/crypto.js';
 test('migrations run to latest and user_version is set', () => {
   const db = openMemoryDatabase();
   const row = db.prepare('PRAGMA user_version').get();
-  assert.equal(row.user_version, 1); // 与 MIGRATIONS.length 一致（v1）
+  assert.equal(row.user_version, 2); // 与 MIGRATIONS.length 一致（v1+v2）
   db.close();
 });
 

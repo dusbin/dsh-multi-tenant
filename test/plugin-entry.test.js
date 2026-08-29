@@ -57,6 +57,7 @@ test('plugin entry: apply() wires config → db → gateway; dispose cleans up',
     logger: { info() {}, warn() {} },
     _dispose: null,
     on(event, handler) { if (event === 'dispose') this._dispose = handler; },
+    get() { return undefined; }, // 无 sessions/sessionProjections（metering 关闭分支）
   };
 
   const port = 39123 + Math.floor(Math.random() * 500);
