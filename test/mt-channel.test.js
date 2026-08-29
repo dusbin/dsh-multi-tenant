@@ -242,3 +242,21 @@ test('mt: data.export is platform-admin only', () => {
   assert.equal(r.value.summary.users >= 4, true); // alice/bob/carol/dave
   assert.ok(r.value.export.users[0].password_hash === null || 'password_hash' in r.value.export.users[0]);
 });
+
+test('mt: system user.create without tenantId returns tenant-required; errors carry details', () => {
+  const { mt, store, sys } = setup();
+  const asSys = { user: store.getUserById(sys.user.id) };
+  // 平台管理员未指定租户 → 明确错误 + details（满足客户端 RpcResult 校验）
+  const r = mt.dispatch('user.create', { username: 'eve', password: 'longenough-password', role: 'user' }, asSys);
+  assert.equal(r.ok, false);
+  assert.equal(r.error.code, 'tenant-required');
+  assert.deepEqual(r.error.details, {});
+  // 指定租户 → 成功
+  const tid = store.listTenants()[0].id;
+  const ok = mt.dispatch('user.create', { tenantId: tid, username: 'eve', password: 'longenough-password', role: 'user' }, asSys);
+  assert.equal(ok.ok, true);
+  // 普通错误也带 details
+  const denied = mt.dispatch('user.list', {}, { user: store.getUserByUsername('bob') });
+  assert.equal(denied.ok, false);
+  assert.deepEqual(denied.error.details, {});
+});
