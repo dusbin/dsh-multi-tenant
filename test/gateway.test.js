@@ -423,3 +423,31 @@ test('gateway: oidc start/callback flow', async (t) => {
   assert.equal(noOidc.status, 404);
   await gw2.close();
 });
+
+// ---------------------------------------------------------------------------
+// M7：安全响应头
+// ---------------------------------------------------------------------------
+test('gateway: security headers on responses', async (t) => {
+  const target = await startTarget();
+  const db = openMemoryDatabase();
+  const store = createStore(db);
+  const cfg = resolveConfig({ gateway: { port: 0 } });
+  const authService = createAuthService(store, cfg);
+  const gateway = createGateway({ cfg, target: { hostname: '127.0.0.1', port: target.address().port }, authService, logger: { warn() {}, info() {} } });
+  const port = await listenGateway(gateway);
+  t.after(async () => {
+    await gateway.close();
+    await new Promise((resolve) => target.close(resolve));
+    db.close();
+  });
+
+  // 代理响应
+  const proxied = await httpJson(port, '/');
+  assert.equal(proxied.headers['x-content-type-options'], 'nosniff');
+  assert.equal(proxied.headers['x-frame-options'], 'DENY');
+  assert.equal(proxied.headers['referrer-policy'], 'no-referrer');
+  assert.match(proxied.headers['content-security-policy'], /default-src 'self'/);
+  // 网关直答（auth 端点）
+  const me = await httpJson(port, '/api/auth/me');
+  assert.equal(me.headers['x-content-type-options'], 'nosniff');
+});

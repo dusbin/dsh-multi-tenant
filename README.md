@@ -2,7 +2,7 @@
 
 DeepSeek Harness 多租户插件：把 DSH 从"本地单用户开发工具"扩展为**多租户、多角色、可登录、可计量、可审计**的服务形态。
 
-> 状态：**M6 完成**（SSO/OIDC 登录；M1-M5 已完成）
+> 状态：**M7 完成（全部里程碑）**——M1-M6 已交付，M7 硬化/部署文档/打包验证完成
 > 方案文档：`docs/方案.md`（v2.0 定稿，含用户决策 D1–D6）；调研报告：`docs/research/01/02/03`
 
 ## 功能路线
@@ -15,7 +15,7 @@ DeepSeek Harness 多租户插件：把 DSH 从"本地单用户开发工具"扩�
 | M4 | 审计日志（查询/CSV 导出/登录失败留痕）+ 审计员视图 + 强制下线 | ✅ 完成 |
 | M5 | LDAP 登录（ldapts，目录绑定验证 + 自动建号） | ✅ 完成 |
 | M6 | SSO/OIDC 登录（openid-client，Authorization Code + PKCE） | ✅ 完成 |
-| M7 | 硬化 + 交付（防爆破细化、TLS/反代文档、打包） | ⏳ 待开发 |
+| M7 | 硬化 + 交付：账号自动锁定、安全响应头、部署文档、真实 `dsh plugin add` 安装验证 | ✅ 完成 |
 
 ## 架构一句话
 
@@ -27,13 +27,16 @@ DeepSeek Harness 多租户插件：把 DSH 从"本地单用户开发工具"扩�
 
 ## 安装
 
-### 方式 A：`dsh plugin`（发布包）
+### 方式 A：`dsh plugin`（发布包/本地目录）
 
 ```sh
-dsh plugin --profile web add dsh-multi-tenant
+dsh plugin --profile web add dsh-multi-tenant            # 已发布包
+dsh plugin --profile web add /path/to/dsh-multi-tenant   # 本地目录（开发验证）
 ```
 
-包声明了 `dsh.bundle`，`dsh plugin` 会自动把它加入 profile 的 bundles 并应用 `cordis.patch.yml`（默认网关 `0.0.0.0:3090`）。
+包声明了 `dsh.bundle`，`dsh plugin` 会自动把它加入 profile 的 bundles 并应用
+`cordis.patch.yml`（默认网关 `0.0.0.0:3090`），零手动配置即可启动。
+已实测：`dsh plugin add <本地目录>` → bundles 自动接入 → 启动后网关按默认配置生效。
 
 ### 方式 B：源码开发（本仓库）
 
@@ -207,7 +210,9 @@ curl http://127.0.0.1:3990/api/auth/me     # bootstrapRequired → bootstrap →
 ## 安全边界（明示）
 
 - v1 为**逻辑隔离**：会话/权限/配额/数据按用户与租户隔离，网关强制；DSH 单进程内无进程级隔离（模型与工具同 UID）。生产强隔离建议每租户独立容器/独立 `DSH_HOME`
-- 登录会话为 `HttpOnly + SameSite=Lax` Cookie；公网部署务必 `cookie.secure: true` + 反代 TLS（或网关自身 TLS，M7）
+- 登录会话为 `HttpOnly + SameSite=Lax` Cookie；公网部署务必 `cookie.secure: true` + 反代 TLS
+- 防爆破：每账号+每 IP 窗口内失败计数，连续失败达阈值**自动锁定账号**（管理员解锁清计数）；网关统一安全响应头（nosniff/DENY/CSP）
+- 部署形态（内网直连 + 公网反代 TLS）与备份/升级见 **`docs/部署.md`**
 - `settings.*`/`credentials.*` 等 DSH 特权方法对远程用户恒 403（DSH 原有限制），多租户场景符合预期
 
 ## License

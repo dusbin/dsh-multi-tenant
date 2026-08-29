@@ -67,7 +67,8 @@ test('login success, me, logout lifecycle', () => {
 });
 
 test('login failures: wrong password, disabled account, rate limit', () => {
-  const { svc } = setup();
+  // autoLock 关闭：本用例只验证纯限流；锁定行为见 auto-lock 用例
+  const { svc } = setup({ auth: { local: { autoLock: false } } });
   svc.bootstrap({ username: 'admin', password: 'longenough-password' });
 
   const wrong = svc.login({ username: 'admin', password: 'totally-wrong' });
@@ -122,5 +123,29 @@ test('login failures are audited (denied)', () => {
   svc.login({ username: 'admin', password: 'longenough-password' });
   const ok = store.listAudit({ action: 'auth.login', result: 'success' });
   assert.equal(ok.length, 1);
+  db.close();
+});
+
+test('auto-lock: repeated failures lock the account beyond the window', () => {
+  const { db, store, svc } = setup({ auth: { local: { maxFailedAttempts: 3, lockWindowMs: 1000, autoLock: true } } });
+  svc.bootstrap({ username: 'admin', password: 'longenough-password' });
+  // 3 次失败 → 锁定
+  for (let i = 0; i < 3; i += 1) {
+    const r = svc.login({ username: 'admin', password: 'totally-wrong' });
+    assert.equal(r.ok, false);
+  }
+  assert.equal(store.getUserByUsername('admin').status, 'locked');
+  const lockAudit = store.listAudit({ action: 'auth.lock' });
+  assert.equal(lockAudit.length, 1);
+  // 窗口过后，正确密码也因锁定被拒
+  const afterWindow = svc.login({ username: 'admin', password: 'longenough-password', method: 'local' });
+  assert.equal(afterWindow.ok, false);
+  assert.equal(afterWindow.error.code, 'account-locked');
+  // 管理员解锁（清空失败计数）后可登录
+  const admin = store.getUserByUsername('admin');
+  store.setUserStatus(admin.id, 'active');
+  store.clearAttempts('u:admin'); // 对应 mt user.setStatus→active 的清计数行为
+  const ok = svc.login({ username: 'admin', password: 'longenough-password', method: 'local' });
+  assert.equal(ok.ok, true);
   db.close();
 });
