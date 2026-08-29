@@ -638,3 +638,86 @@ test('gateway: list endpoints filtered by tenant visibility', async (t) => {
   assert.deepEqual(await ws(daveCookie), ['w2']);
   assert.deepEqual((await ws(rootCookie)).sort(), ['w1', 'w2']);
 });
+
+// ---------------------------------------------------------------------------
+// WS 下行帧过滤（租户可见性）
+// ---------------------------------------------------------------------------
+test('gateway: WS downlink drops invisible workspace/session frames', async (t) => {
+  const db = openMemoryDatabase();
+  const store = createStore(db);
+  const cfg = resolveConfig({ gateway: { port: 0 } });
+  const authService = createAuthService(store, cfg);
+
+  // 先建租户/用户（拿真实 id），再构造帧
+  const t10 = store.createTenant({ name: 't10' });
+  const t20 = store.createTenant({ name: 't20' });
+  const aliceId = store.createUser({ tenantId: t10, username: 'alice', role: 'admin' });
+  const daveId = store.createUser({ tenantId: t20, username: 'dave', role: 'admin' });
+  const aliceSid = `u-${aliceId}-t-${t10}-s-a`;
+  const daveSid = `u-${daveId}-t-${t20}-s-b`;
+  const newSid = `u-${daveId}-t-${t20}-s-new`;
+
+  // mock 目标：WS 升级后立即推送 3 帧（可见工作区 / 他租户工作区 / 他租户 session-added）
+  // 立即推送会与 101 同段到达 → 覆盖网关 upHead 过滤路径
+  const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+  const target = http.createServer((q, s) => { s.writeHead(200); s.end('ok'); });
+  target.on('upgrade', (req, socket) => {
+    const key = req.headers['sec-websocket-key'];
+    const accept = crypto.createHash('sha1').update(key + WS_GUID).digest('base64');
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    const frames = [
+      { type: 'host/workspace-changed', workspace: { workspaceId: 'w1', sessionIds: [aliceSid] } },
+      { type: 'host/workspace-changed', workspace: { workspaceId: 'w2', sessionIds: [daveSid] } },
+      { type: 'host/session-added', sessionId: newSid, blank: true },
+    ];
+    for (const f of frames) {
+      const env = { type: 'server-request', rpcId: 'r', method: f.type, payload: f };
+      socket.write(serverFrame(0x1, Buffer.from(JSON.stringify(env), 'utf8')));
+    }
+    socket.on('error', () => {});
+    socket.on('end', () => socket.end());
+  });
+  await new Promise((resolve) => target.listen(0, '127.0.0.1', resolve));
+  const gateway = createGateway({ cfg, target: { hostname: '127.0.0.1', port: target.address().port }, authService, logger: { warn() {}, info() {} } });
+  const port = await listenGateway(gateway);
+  t.after(async () => {
+    await gateway.close();
+    await new Promise((resolve) => target.close(resolve));
+    db.close();
+  });
+  const { hashSessionToken } = await import('../lib/host/crypto.js');
+
+  // t10 租户管理员 alice 的会话
+  const token = `t-alice-${Math.random().toString(36).slice(2)}`;
+  store.createSession({ userId: aliceId, tokenHash: hashSessionToken(token), expiresAt: Date.now() + 10000 });
+
+  // 收集帧的 WS 客户端（处理 head 中与 101 同段的字节）
+  const collect = (cookie) => new Promise((resolve, reject) => {
+    const key = crypto.randomBytes(16).toString('base64');
+    const req = http.request({ hostname: '127.0.0.1', port, path: '/api/events.host', headers: { connection: 'Upgrade', upgrade: 'websocket', 'sec-websocket-key': key, 'sec-websocket-version': '13', cookie }, agent: false });
+    req.on('upgrade', (res, socket, head) => {
+      let buffer = head && head.length ? Buffer.from(head) : Buffer.alloc(0);
+      const types = [];
+      const drain = () => {
+        for (;;) {
+          const f = parseClientFrame(buffer);
+          if (!f) break;
+          buffer = buffer.subarray(f.consumed);
+          if (f.opcode === 0x1) {
+            try { types.push(JSON.parse(f.payload.toString('utf8')).payload.type); } catch { types.push('non-json'); }
+          }
+        }
+      };
+      drain(); // 立即处理 head 中与 101 同段的帧
+      socket.on('data', (chunk) => { buffer = Buffer.concat([buffer, chunk]); drain(); });
+      socket.on('error', reject);
+      setTimeout(() => { socket.destroy(); resolve(types); }, 500);
+    });
+    req.on('error', reject);
+    req.end();
+  });
+
+  const ws = await collect(`mt_session=${token}`);
+  // 3 帧中只应收到可见工作区 w1；w2 与他租户 session-added 被网关丢弃
+  assert.deepEqual(ws, ['host/workspace-changed']);
+});

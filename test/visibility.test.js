@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sessionVisible, filterWorkspaceRow, filterListValue } from '../lib/host/visibility.js';
+import { sessionVisible, filterWorkspaceRow, filterListValue, filterDownlinkPayload } from '../lib/host/visibility.js';
 
 const sys = { id: 1, role: 'system' };
 const admin = { id: 2, role: 'admin', tenant_id: 10 };
@@ -65,4 +65,36 @@ test('filterListValue: session.list / session.search / workspace.list', () => {
   assert.equal(ws.items.length, 1);
   assert.equal(ws.items[0].workspaceId, 'w1');
   assert.deepEqual(ws.archivedSessionIds, ['u-2-t-10-s-old']);
+});
+
+test('filterDownlinkPayload: WS 下行帧按可见性过滤', () => {
+  const t10Admin = { id: 2, role: 'admin', tenant_id: 10 };
+  const u4 = { id: 4, role: 'user', tenant_id: 10 };
+  const frame = (payload) => ({ type: 'server-request', rpcId: 'x', method: payload.type, payload });
+
+  // workspace-changed：含本租户会话 → 裁剪后放行；不含 → 丢弃
+  const visibleWs = frame({ type: 'host/workspace-changed', workspace: { workspaceId: 'w1', sessionIds: ['u-2-t-10-s-a', 'u-5-t-20-s-b'] } });
+  const f1 = filterDownlinkPayload(visibleWs.payload, t10Admin);
+  assert.ok(f1);
+  assert.deepEqual(f1.workspace.sessionIds, ['u-2-t-10-s-a']);
+  const hiddenWs = frame({ type: 'host/workspace-changed', workspace: { workspaceId: 'w2', sessionIds: ['u-5-t-20-s-b'] } });
+  assert.equal(filterDownlinkPayload(hiddenWs.payload, t10Admin), null);
+
+  // session-added：本人可见/他租户丢弃
+  assert.ok(filterDownlinkPayload(frame({ type: 'host/session-added', sessionId: 'u-2-t-10-s-a' }).payload, t10Admin));
+  assert.equal(filterDownlinkPayload(frame({ type: 'host/session-added', sessionId: 'u-5-t-20-s-b' }).payload, t10Admin), null);
+  // 使用者：同租户他人会话也丢弃
+  assert.equal(filterDownlinkPayload(frame({ type: 'host/session-added', sessionId: 'u-2-t-10-s-a' }).payload, u4), null);
+  assert.ok(filterDownlinkPayload(frame({ type: 'host/session-added', sessionId: 'u-4-t-10-s-c' }).payload, u4));
+
+  // workspace-removed / order-changed：非平台管理员丢弃
+  assert.equal(filterDownlinkPayload(frame({ type: 'host/workspace-removed', workspaceId: 'w1' }).payload, t10Admin), null);
+  assert.equal(filterDownlinkPayload(frame({ type: 'host/workspace-order-changed', workspaceIds: ['w1', 'w2'] }).payload, t10Admin), null);
+  // archived：裁剪
+  const arch = filterDownlinkPayload(frame({ type: 'host/archived-sessions-changed', archivedSessionIds: ['u-2-t-10-s-x', 'u-5-t-20-s-y'] }).payload, t10Admin);
+  assert.deepEqual(arch.archivedSessionIds, ['u-2-t-10-s-x']);
+
+  // 平台管理员：全部放行
+  assert.equal(filterDownlinkPayload(visibleWs.payload, sys), visibleWs.payload);
+  assert.equal(filterDownlinkPayload(hiddenWs.payload, sys), hiddenWs.payload);
 });

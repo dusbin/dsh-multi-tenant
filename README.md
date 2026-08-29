@@ -224,9 +224,12 @@ node scripts/maintenance.mjs import --in backup.json --replace                  
 - **使用者**：仅本人（`u-<uid>-t-<tid>-s-` 精确前缀）
 - **无归属前缀的遗留会话**：仅平台管理员可见
 
-实现：网关对列表类端点（`session.list` / `session.search` / `workspace.list`）的响应按
-会话前缀过滤（工作区按可见会话裁剪，无可视会话则隐藏）。已知边界：events.mux 下行 WS
-帧不做帧级过滤（客户端只渲染列表内会话，且网关已拦截对他人会话的 open/attach）。
+实现：
+- 列表端点（`session.list` / `session.search` / `workspace.list`）响应按会话前缀过滤
+  （工作区按可见会话裁剪，无可视会话则隐藏）
+- **WS 下行帧级过滤**（`events.mux` / `events.host`）：`host/workspace-changed`、
+  `host/session-*`、`archived-sessions-changed` 与带 sessionId 的 mux 帧按可见性
+  裁剪/丢弃（含与 101 同段到达的 upHead 帧），杜绝推送帧泄漏
 
 ## 开发
 
