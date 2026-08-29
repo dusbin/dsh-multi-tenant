@@ -539,3 +539,102 @@ test('recovery endpoint: works when no active sysadmin, loopback-only', async (t
   assert.equal(again.status, 409);
   db.close();
 });
+
+// ---------------------------------------------------------------------------
+// 租户可见性：session.list / workspace.list 响应过滤
+// ---------------------------------------------------------------------------
+test('gateway: list endpoints filtered by tenant visibility', async (t) => {
+  const db = openMemoryDatabase();
+  const store = createStore(db);
+  const cfg = resolveConfig({ gateway: { port: 0 } });
+  const authService = createAuthService(store, cfg);
+
+  // 先建租户与用户（拿真实 id），再构造 mock 响应
+  const t10 = store.createTenant({ name: 't10' });
+  const t20 = store.createTenant({ name: 't20' });
+  const aliceId = store.createUser({ tenantId: t10, username: 'alice', role: 'admin' });
+  const bobId = store.createUser({ tenantId: t10, username: 'bob', role: 'user' });
+  const daveId = store.createUser({ tenantId: t20, username: 'dave', role: 'admin' });
+  const aliceSid = `u-${aliceId}-t-${t10}-s-a`;
+  const daveSid = `u-${daveId}-t-${t20}-s-b`;
+  const bobSid = `u-${bobId}-t-${t10}-s-c`;
+
+  // mock 目标：session.list 返回混合租户会话（用真实租户/用户 id）
+  const target = http.createServer((req, res) => {
+    if (req.method === 'POST' && req.url === '/api/session.list') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        type: 'server-response', rpcId: 'l', result: { ok: true, value: { items: [
+          { sessionId: aliceSid, updatedAt: 1 },
+          { sessionId: daveSid, updatedAt: 2 },
+          { sessionId: bobSid, updatedAt: 3 },
+        ] } },
+      }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/api/workspace.list') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        type: 'server-response', rpcId: 'w', result: { ok: true, value: { workspaces: [
+          { workspaceId: 'w1', title: 'x', sessionIds: [aliceSid] },
+          { workspaceId: 'w2', title: 'y', sessionIds: [daveSid] },
+        ] } },
+      }));
+      return;
+    }
+    res.writeHead(404); res.end('nf');
+  });
+  await new Promise((resolve) => target.listen(0, '127.0.0.1', resolve));
+  const gateway = createGateway({ cfg, target: { hostname: '127.0.0.1', port: target.address().port }, authService, logger: { warn() {}, info() {} } });
+  const port = await listenGateway(gateway);
+  t.after(async () => {
+    await gateway.close();
+    await new Promise((resolve) => target.close(resolve));
+    db.close();
+  });
+
+  const { hashSessionToken } = await import('../lib/host/crypto.js');
+  // bootstrap 平台管理员（要求库为空——在用户创建之后会 409，故先清空：此处直接构造 root）
+  // 简化：直接用 createUser 造一个 system 用户（不依赖 bootstrap 的 HTTP 路径）
+  const rootId = store.createUser({ username: 'root', passwordHash: 'x', role: 'system' });
+  const root = store.getUserById(rootId);
+  const issueCookie = (uid) => {
+    const token = `t-${uid}-${Math.random().toString(36).slice(2)}`;
+    store.createSession({ userId: uid, tokenHash: hashSessionToken(token), expiresAt: Date.now() + 10000 });
+    return `mt_session=${token}`;
+  };
+  const login = (uid) => Promise.resolve(issueCookie(uid));
+  const rootCookie = issueCookie(root.id);
+
+  const aliceCookie = await login(aliceId);
+  const bobCookie = await login(bobId);
+  const daveCookie = await login(daveId);
+
+  const list = async (cookie) => {
+    const r = await httpJson(port, '/api/session.list', {
+      method: 'POST', cookie,
+      body: { type: 'client-request', rpcId: 'x', method: 'session.list', payload: {} },
+    });
+    return (r.body.result.value.items || []).map((i) => i.sessionId);
+  };
+  const ws = async (cookie) => {
+    const r = await httpJson(port, '/api/workspace.list', {
+      method: 'POST', cookie,
+      body: { type: 'client-request', rpcId: 'x', method: 'workspace.list', payload: {} },
+    });
+    return (r.body.result.value.workspaces || []).map((w) => w.workspaceId);
+  };
+
+  // 平台管理员：全部
+  assert.deepEqual((await list(rootCookie)).sort(), [aliceSid, bobSid, daveSid]);
+  // 租户管理员 alice(t10)：仅本租户
+  assert.deepEqual((await list(aliceCookie)).sort(), [aliceSid, bobSid]);
+  // 使用者 bob(t10)：仅本人
+  assert.deepEqual(await list(bobCookie), [bobSid]);
+  // 他租户管理员 dave(t20)：仅 t20
+  assert.deepEqual(await list(daveCookie), [daveSid]);
+  // workspace：alice 只看到 w1，dave 只看到 w2，平台管理员两者
+  assert.deepEqual(await ws(aliceCookie), ['w1']);
+  assert.deepEqual(await ws(daveCookie), ['w2']);
+  assert.deepEqual((await ws(rootCookie)).sort(), ['w1', 'w2']);
+});

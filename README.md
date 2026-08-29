@@ -217,6 +217,17 @@ node scripts/maintenance.mjs import --in backup.json --replace                  
 - `/mt data.export`（**仅平台管理员**）：全量备份下载（与 CLI export 同格式）
 - 导入仅 CLI（覆盖式恢复，防止误操作）
 
+## 租户可见性（工作区 / 会话）
+
+- **平台管理员**：查看所有工作区与会话/任务
+- **租户管理员 / 审计员**：仅本租户（`t-<tid>` 前缀归属）
+- **使用者**：仅本人（`u-<uid>-t-<tid>-s-` 精确前缀）
+- **无归属前缀的遗留会话**：仅平台管理员可见
+
+实现：网关对列表类端点（`session.list` / `session.search` / `workspace.list`）的响应按
+会话前缀过滤（工作区按可见会话裁剪，无可视会话则隐藏）。已知边界：events.mux 下行 WS
+帧不做帧级过滤（客户端只渲染列表内会话，且网关已拦截对他人会话的 open/attach）。
+
 ## 开发
 
 ```sh
