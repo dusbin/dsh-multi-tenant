@@ -441,15 +441,16 @@ test('gateway: security headers on responses', async (t) => {
     db.close();
   });
 
-  // 代理响应
+  // 代理响应（DSH 前端）：有 nosniff/XFO/referrer，但无 CSP（DSH 前端依赖 eval 求值 !!js，CSP 会拦）
   const proxied = await httpJson(port, '/');
   assert.equal(proxied.headers['x-content-type-options'], 'nosniff');
   assert.equal(proxied.headers['x-frame-options'], 'DENY');
   assert.equal(proxied.headers['referrer-policy'], 'no-referrer');
-  assert.match(proxied.headers['content-security-policy'], /default-src 'self'/);
-  // 网关直答（auth 端点）
+  assert.equal(proxied.headers['content-security-policy'], undefined);
+  // 网关直答 JSON（auth 端点）：仍带完整安全头（含 CSP）
   const me = await httpJson(port, '/api/auth/me');
   assert.equal(me.headers['x-content-type-options'], 'nosniff');
+  assert.match(me.headers['content-security-policy'], /default-src 'self'/);
 });
 
 // ---------------------------------------------------------------------------
