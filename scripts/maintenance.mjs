@@ -44,11 +44,11 @@ function argValue(argv, name) {
   return idx !== -1 ? argv[idx + 1] : undefined;
 }
 
-function openStore(dbPath) {
-  if (!fs.existsSync(dbPath)) {
-    throw new Error(`数据库不存在: ${dbPath}\n（首次安装且未初始化时，请先通过登录页 bootstrap 创建平台管理员）`);
+function openStore(dbPath, { create = false } = {}) {
+  if (!create && !fs.existsSync(dbPath)) {
+    throw new Error(`数据库不存在: ${dbPath}\n（首次安装且未初始化时，请先通过登录页 bootstrap 创建平台管理员；import 会自动建库）`);
   }
-  const db = openDatabase(dbPath);
+  const db = openDatabase(dbPath); // 不存在时自动创建并迁移
   return { db, store: createStore(db) };
 }
 
@@ -59,19 +59,18 @@ const dbPath = resolveDbPath(rest);
 const out = (obj) => { console.log(JSON.stringify(obj, null, 2)); };
 
 try {
-  const { db, store } = command === 'status' || command === 'export' || command === 'import' || command === 'reset-system'
-    ? openStore(dbPath)
-    : openStore(dbPath);
+  const { db, store } = openStore(dbPath, { create: command === 'import' });
 
   switch (command) {
     case 'status': {
+      const redact = (u) => ({ ...u, password_hash: u.password_hash ? '***' : null });
       const users = store.listUsers(null);
       out({
         db: dbPath,
         tenants: store.countTenants(),
         users: users.length,
-        systemAdmins: users.filter((u) => u.role === 'system'),
-        activeSystemAdmins: users.filter((u) => u.role === 'system' && u.status === 'active'),
+        systemAdmins: users.filter((u) => u.role === 'system').map(redact),
+        activeSystemAdmins: users.filter((u) => u.role === 'system' && u.status === 'active').map(redact),
         quotas: store.listQuotas().length,
         usageRecords: store.listAllUsageRecords().length,
         auditLogs: store.listAllAudit().length,
