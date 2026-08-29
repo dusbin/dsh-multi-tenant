@@ -189,6 +189,34 @@ Set-Cookie + 302 回原目标。
 - state 失效/换令牌失败/无 subject → 明确错误码，302 回 `/?mt_error=<code>` 并记审计
 - SSO 登录同样受禁用/锁定账号即时校验
 
+## 管理员逃生通道 / 系统重置 / 数据备份（逃生与运维）
+
+### 主机侧维护 CLI（逃生通道，免登录）
+
+```sh
+node scripts/maintenance.mjs status                          # 系统概览
+node scripts/maintenance.mjs reset-admin-password --username <u> --password <p>  # 重置密码（免登录）
+node scripts/maintenance.mjs create-system-admin --username <u> --password <p>   # 无可用管理员时创建
+node scripts/maintenance.mjs unlock-user --username <u>                          # 解锁账号
+node scripts/maintenance.mjs reset-system [--keep-usage]                         # 重置多租户系统
+node scripts/maintenance.mjs export --out backup.json                            # 导出全量数据
+node scripts/maintenance.mjs import --in backup.json --replace                   # 导入恢复（覆盖）
+```
+
+- 需要本机文件系统访问（与 DSH 同信任级）；`--db` 缺省 `$DSH_HOME/multi-tenant/mt.db`
+- 导出为**版本化 JSON**（含密码哈希——视为敏感凭据），覆盖 tenants/users/quotas/用量/审计
+
+### UI 逃生通道（环回受限）
+
+- 当**无任何可用平台管理员**（全部禁用/锁定/删除）时，登录页显示"管理员恢复"表单
+- `POST /api/auth/recovery` **仅允许环回来源**（本机/网关本地）——远程无法触发
+- 恢复 = 新建平台管理员（复用会话机制）
+
+### 控制台导出
+
+- `/mt data.export`（**仅平台管理员**）：全量备份下载（与 CLI export 同格式）
+- 导入仅 CLI（覆盖式恢复，防止误操作）
+
 ## 开发
 
 ```sh

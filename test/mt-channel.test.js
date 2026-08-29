@@ -227,3 +227,18 @@ test('mt: user.revokeSessions force-logout', () => {
   const denied = mt.dispatch('user.revokeSessions', { userId: b.id }, asAuditor);
   assert.equal(denied.error.code, 'forbidden');
 });
+
+test('mt: data.export is platform-admin only', () => {
+  const { mt, store, a, c } = setup();
+  const asAdmin = { user: store.getUserById(a.id) };
+  const asAuditor = { user: store.getUserById(c.id) };
+  // 租户管理员/审计员 → 拒绝
+  assert.equal(mt.dispatch('data.export', {}, asAdmin).error.code, 'forbidden');
+  assert.equal(mt.dispatch('data.export', {}, asAuditor).error.code, 'forbidden');
+  // system → 允许
+  const sys = { user: store.getUserById(store.getUserByUsername('root').id) };
+  const r = mt.dispatch('data.export', {}, sys);
+  assert.equal(r.ok, true);
+  assert.equal(r.value.summary.users >= 4, true); // alice/bob/carol/dave
+  assert.ok(r.value.export.users[0].password_hash === null || 'password_hash' in r.value.export.users[0]);
+});

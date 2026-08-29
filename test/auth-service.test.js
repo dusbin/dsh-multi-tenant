@@ -149,3 +149,43 @@ test('auto-lock: repeated failures lock the account beyond the window', () => {
   assert.equal(ok.ok, true);
   db.close();
 });
+
+test('recovery: creates platform admin when none active; blocked otherwise', () => {
+  const { db, store, svc } = setup();
+  // 建租户用户（非 system）→ recoveryRequired
+  const tid = store.createTenant({ name: 't' });
+  store.createUser({ tenantId: tid, username: 'bob', role: 'user' });
+  assert.equal(svc.recoveryRequired(), true);
+  // me（未登录）报 recoveryRequired
+  const me = svc.me(null);
+  assert.equal(me.recoveryRequired, true);
+  assert.equal(me.user, null);
+  // recovery 重建管理员
+  const r = svc.recovery({ username: 'root2', password: 'longenough-password' });
+  assert.equal(r.ok, true);
+  assert.equal(r.user.role, 'system');
+  assert.equal(svc.recoveryRequired(), false);
+  // 已有可用管理员 → recovery 拒绝
+  const again = svc.recovery({ username: 'root3', password: 'longenough-password' });
+  assert.equal(again.ok, false);
+  assert.equal(again.error.code, 'recovery-not-needed');
+  // 已登录用户 me 正常（不受 recoveryRequired 影响）
+  const authed = svc.me(`mt_session=${r.token}`);
+  assert.equal(authed.ok, true);
+  assert.equal(authed.user.username, 'root2');
+  assert.equal(authed.recoveryRequired, false);
+  db.close();
+});
+
+test('recovery: disabled system admin triggers recovery; login still denied', () => {
+  const { db, store, svc } = setup();
+  const boot = svc.bootstrap({ username: 'root', password: 'longenough-password' });
+  const tid = store.createTenant({ name: 't' });
+  store.createUser({ tenantId: tid, username: 'bob', role: 'user' });
+  assert.equal(svc.recoveryRequired(), false);
+  store.setUserStatus(boot.user.id, 'disabled'); // 禁用唯一平台管理员
+  assert.equal(svc.recoveryRequired(), true);
+  const r = svc.recovery({ username: 'root2', password: 'longenough-password' });
+  assert.equal(r.ok, true);
+  db.close();
+});

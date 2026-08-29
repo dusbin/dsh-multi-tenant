@@ -497,3 +497,45 @@ test('wireAuthRoutes: /api/auth works on DSH webserver side', async (t) => {
   assert.equal(me3.status, 401);
   db.close();
 });
+
+// ---------------------------------------------------------------------------
+// 逃生通道：/api/auth/recovery（环回受限）
+// ---------------------------------------------------------------------------
+test('recovery endpoint: works when no active sysadmin, loopback-only', async (t) => {
+  const db = openMemoryDatabase();
+  const store = createStore(db);
+  const cfg = resolveConfig({});
+  const authService = createAuthService(store, cfg);
+  const { createAuthRouter, wireAuthRoutes } = await import('../lib/host/auth-router.js');
+  const router = createAuthRouter({ cfg, authService, logger: { warn() {}, info() {} } });
+  let captured = null;
+  const fakeCtx = { webServer: { register(r) { captured = r; } }, logger: { warn() {}, info() {} } };
+  wireAuthRoutes(fakeCtx, router);
+  const server = http.createServer((req, res) => captured.handler(req, res));
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  // 先 bootstrap 管理员，再禁用 → recoveryRequired
+  await httpJson(port, '/api/auth/bootstrap', { method: 'POST', body: { username: 'root', password: 'longenough-password' } });
+  const root = store.getUserByUsername('root');
+  store.setUserStatus(root.id, 'disabled');
+  const tid = store.createTenant({ name: 't' });
+  store.createUser({ tenantId: tid, username: 'bob', role: 'user' });
+
+  const me = await httpJson(port, '/api/auth/me');
+  assert.equal(me.body.recoveryRequired, true);
+
+  // recovery（环回）→ 201 + cookie
+  const rec = await httpJson(port, '/api/auth/recovery', { method: 'POST', body: { username: 'root2', password: 'longenough-password' } });
+  assert.equal(rec.status, 201);
+  const cookie = `mt_session=${extractCookieToken(rec.headers['set-cookie'])}`;
+  const me2 = await httpJson(port, '/api/auth/me', { cookie });
+  assert.equal(me2.body.user.username, 'root2');
+  assert.equal(me2.body.recoveryRequired, false);
+
+  // 已有可用管理员 → recovery 409
+  const again = await httpJson(port, '/api/auth/recovery', { method: 'POST', body: { username: 'root3', password: 'longenough-password' } });
+  assert.equal(again.status, 409);
+  db.close();
+});
