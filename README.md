@@ -2,7 +2,7 @@
 
 DeepSeek Harness 多租户插件：把 DSH 从"本地单用户开发工具"扩展为**多租户、多角色、可登录、可计量、可审计**的服务形态。
 
-> 状态：**M1 完成**（认证反代网关 + 本地邮箱密码登录 + bootstrap 平台管理员 + SQLite 数据层，已在真实 DSH profile 上冒烟验证）
+> 状态：**M2 完成**（多租户 + RBAC + 管理控制台；M1 认证反代网关 + 登录 + bootstrap + SQLite 已在前一里程碑完成并冒烟验证）
 > 方案文档：`docs/方案.md`（v2.0 定稿，含用户决策 D1–D6）；调研报告：`docs/research/01/02/03`
 
 ## 功能路线
@@ -10,8 +10,8 @@ DeepSeek Harness 多租户插件：把 DSH 从"本地单用户开发工具"扩�
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
 | M1 | 工程骨架 + 认证反代网关（HTTP/WS 代理、cookie 会话）+ bootstrap 平台管理员 + DB 层 | ✅ 完成 |
-| M2 | 多租户 + RBAC：租户/用户/角色管理 API（/mt）+ 管理控制台 UI | ⏳ 待开发 |
-| M3 | 用量统计（token 四桶）+ 配额（同步检查 + 周期累计）+ 个人中心 | ⏳ |
+| M2 | 多租户 + RBAC：/mt 管理通道、租户/用户/角色管理 API、会话归属前缀强制、管理控制台 UI | ✅ 完成 |
+| M3 | 用量统计（token 四桶）+ 配额（同步检查 + 周期累计）+ 个人中心 | ⏳ 待开发 |
 | M4 | 审计日志 + 审计员视图 + CSV 导出 + 强制下线 | ⏳ |
 | M5 | LDAP 登录（ldapts） | ⏳ |
 | M6 | SSO/OIDC 登录（openid-client） | ⏳ |
@@ -85,10 +85,38 @@ ln -sfn /Users/robinddu/Desktop/workspace/robinddu/dsh-multi-tenant \
 
 ## 访问策略（v1）
 
-- `POST/PUT/PATCH/DELETE /api/*`：必须登录，否则 401
+- 除公开路径外**一切请求**（任意方法，含 `/api`、`/mt`）必须登录，否则 401
+- 公开路径：`/api/auth/*`（认证端点）、GET/HEAD 静态资源（`/`、`/assets/*`、`/plugins/*`、favicon）
 - `/api/events.mux`、`/api/events.host` 的 WebSocket upgrade：必须登录，否则拒绝握手
-- 静态资源（`/`、`/assets/*`、`/plugins/*`）与 `/api/auth/*`：无需登录（登录页依赖 shell 加载）
+- **会话归属强制**：`session.create` 的 `sessionId` 被网关改写为归属前缀
+  `u-<uid>-t-<tid>-s-<uuid>`（伪造他人前缀无效）；其他会话作用域请求校验前缀，
+  越权返回 403 并记审计
 - 直连 DSH 端口（`127.0.0.1:<port>`）保持开发者模式开放；生产请只暴露网关端口
+
+## 角色与权限（M2）
+
+| 角色 | 权限 |
+|---|---|
+| 平台管理员（system） | 租户生命周期（建/停/列）、任意租户用户管理、全局审计（不占租户配额） |
+| 租户管理员（admin） | 本租户用户管理（建/启停/改角色/重置密码/删除）、配额设置、审计查看（自动含审计权限，D4） |
+| 审计员（auditor） | 本租户只读统计 + 审计日志 |
+| 使用者（user） | 登录、使用会话、查看个人用量 |
+
+租户间完全隔离：会话、用户、用量、审计、配额互不可见（网关 + 服务层双重强制）。
+
+## 管理 API（`/mt` 通道）
+
+客户端经 `ctx.connection.rpc.call('/mt', endpoint, payload)` 调用（响应为 RPC 信封）。
+
+| 端点 | 说明 | 权限 |
+|---|---|---|
+| `me` | 当前用户 + 租户信息 | 任意已登录 |
+| `auth.changePassword` | 修改本人密码 | 任意已登录 |
+| `tenant.list` / `tenant.create` / `tenant.setStatus` | 租户管理 | system |
+| `user.list` | 用户列表（本租户） | admin+ |
+| `user.create` / `user.setStatus` / `user.setRole` / `user.setPassword` / `user.delete` | 用户管理 | admin+（租户内） |
+
+管理控制台 UI（浏览器）：设置面板新增页签 **个人中心 / 用户管理 / 租户管理**（按角色可见）。
 
 ## 开发
 

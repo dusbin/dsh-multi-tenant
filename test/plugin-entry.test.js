@@ -53,7 +53,7 @@ test('plugin entry: apply() wires config → db → gateway; dispose cleans up',
   const dbPath = path.join(tmpDir, 'mt.db');
 
   const ctx = {
-    webServer: { port: targetPort },
+    webServer: { port: targetPort, register() {} }, // /mt 路由挂载占位
     logger: { info() {}, warn() {} },
     _dispose: null,
     on(event, handler) { if (event === 'dispose') this._dispose = handler; },
