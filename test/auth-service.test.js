@@ -117,7 +117,7 @@ test('login failures are audited (denied)', () => {
   assert.equal(wrong.ok, false);
   const denied = store.listAudit({ action: 'auth.login', result: 'denied' });
   assert.equal(denied.length, 1);
-  assert.equal(denied[0].detail, JSON.stringify({ reason: 'invalid-credentials', userId: 1 }));
+  assert.equal(denied[0].detail, JSON.stringify({ reason: 'invalid-credentials', userId: 1, method: 'auto' }));
   // 成功登录也审计
   svc.login({ username: 'admin', password: 'longenough-password' });
   const ok = store.listAudit({ action: 'auth.login', result: 'success' });

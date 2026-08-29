@@ -42,5 +42,8 @@
     "rbac",
     "quota",
     "audit"
-  ]
+  ],
+  "dependencies": {
+    "ldapts": "^9.0.0"
+  }
 }

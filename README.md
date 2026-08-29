@@ -2,7 +2,7 @@
 
 DeepSeek Harness 多租户插件：把 DSH 从"本地单用户开发工具"扩展为**多租户、多角色、可登录、可计量、可审计**的服务形态。
 
-> 状态：**M4 完成**（审计日志视图 + 审计员角色 + CSV 导出 + 强制下线；M1-M3 已完成）
+> 状态：**M5 完成**（LDAP 登录；M1-M4 已完成）
 > 方案文档：`docs/方案.md`（v2.0 定稿，含用户决策 D1–D6）；调研报告：`docs/research/01/02/03`
 
 ## 功能路线
@@ -13,8 +13,8 @@ DeepSeek Harness 多租户插件：把 DSH 从"本地单用户开发工具"扩�
 | M2 | 多租户 + RBAC：/mt 管理通道、租户/用户/角色管理 API、会话归属前缀强制、管理控制台 UI | ✅ 完成 |
 | M3 | 用量统计（token 四桶）+ 配额（同步检查 + 周期累计）+ 用量/配额 UI | ✅ 完成 |
 | M4 | 审计日志（查询/CSV 导出/登录失败留痕）+ 审计员视图 + 强制下线 | ✅ 完成 |
-| M5 | LDAP 登录（ldapts） | ⏳ 待开发 |
-| M6 | SSO/OIDC 登录（openid-client） | ⏳ |
+| M5 | LDAP 登录（ldapts，目录绑定验证 + 自动建号） | ✅ 完成 |
+| M6 | SSO/OIDC 登录（openid-client） | ⏳ 待开发 |
 | M7 | 硬化 + 交付（防爆破细化、TLS/反代文档、打包） | ⏳ |
 
 ## 架构一句话
@@ -140,6 +140,28 @@ ln -sfn /Users/robinddu/Desktop/workspace/robinddu/dsh-multi-tenant \
 - **查询**：`audit.list`（action/result/用户/时间过滤 + 分页）；**导出**：`audit.export`（CSV，UTF-8 BOM）
 - **审计员角色**：租户内只读查询与导出；使用者无审计权限；平台管理员全局可查
 - **强制下线**：`user.revokeSessions` 吊销指定用户全部会话（启停账号时同样即时失效会话）
+
+## LDAP 登录（M5）
+
+`/api/auth/login` 支持 `method: 'local' | 'ldap'`（省略时自动：有本地账号走本地，否则尝试 LDAP）；
+登录页按 `me` 返回的 `methods` 渲染按钮。
+
+| 配置键（`auth.ldap.*`） | 默认 | 说明 |
+|---|---|---|
+| `enabled` | `false` | 启用 LDAP |
+| `url` | — | `ldap://host:389` 或 `ldaps://host:636` |
+| `bindDn` / `bindPassword` | 空 | 服务账号（空 = 匿名搜索） |
+| `baseDn` | — | 用户搜索基 |
+| `userFilter` | `(uid={{username}})` | 搜索过滤器，`{{username}}` 自动转义 |
+| `attributes` | `{username: 'uid', email: 'mail', displayName: 'cn'}` | LDAP 属性 → 本地字段映射 |
+| `autoProvision` | `true` | 首次登录自动建号（按 `ldap_dn` 关联） |
+| `defaultTenantId` | `null` | 自动建号归属租户（null = 平台域） |
+| `defaultRole` | `user` | 自动建号默认角色 |
+| `timeoutMs` | `5000` | 目录操作超时 |
+
+- 认证流程：服务账号 bind → 按过滤器搜索用户 → **以用户 DN + 密码绑定**（标准 LDAP 密码校验）
+- 目录凭据错误 → `invalid-credentials`；目录不可达 → `ldap-unavailable`（不泄漏目录细节）
+- LDAP 登录同样受防爆破与审计；禁用/锁定账号即时生效
 
 ## 开发
 
