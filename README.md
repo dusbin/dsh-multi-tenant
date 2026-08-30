@@ -124,7 +124,7 @@ ln -sfn /Users/robinddu/Desktop/workspace/robinddu/dsh-multi-tenant \
 | `audit.list` / `audit.export` | 审计日志查询/CSV 导出（可按 action/result 过滤） | auditor+（租户内只读），system 全局 |
 | `user.revokeSessions` | 强制下线（吊销该用户全部会话） | admin+（租户内），本人亦可 |
 
-管理控制台 UI（浏览器）：设置面板新增页签 **个人中心 / 用户管理 / 租户管理 / 用量统计 / 配额 / 审计日志**（按角色可见）。
+管理控制台 UI（浏览器）：设置面板新增页签 **个人中心 / 用户管理 / 租户管理 / 用量统计 / 配额 / 审计日志**（按角色可见）；侧边栏设置按钮上方常驻**当前用户芯片**（用户名 + 角色/租户 + 退出登录，收起态为圆形退出图标）。
 
 ## 用量统计与配额（M3）
 
