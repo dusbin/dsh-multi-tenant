@@ -832,3 +832,39 @@ test('gateway: rewrites Origin to loopback target so privileged methods and WS p
   assert.equal(allowedPick.status, 200);
   assert.equal(allowedPick.body.result.ok, true);
 });
+
+// ---------------------------------------------------------------------------
+// 上游拒绝 upgrade（普通 HTTP 而非 101）：网关必须把响应转发给浏览器，不得
+// 挂起（修复前：'response' 无监听 → WS 请求永久 pending，且 upRes 无人消费，
+// 对端 RST 时 error 无监听可致 unhandled 'error' 崩溃）
+// ---------------------------------------------------------------------------
+test('gateway: upstream refusing upgrade is forwarded as plain HTTP, not hung', async (t) => {
+  const target = http.createServer((q, s) => { s.writeHead(200); s.end('ok'); });
+  target.on('upgrade', (req, socket) => {
+    socket.write('HTTP/1.1 403 Forbidden\r\ncontent-type: text/plain\r\ncontent-length: 9\r\nconnection: close\r\n\r\nforbidden');
+    socket.end();
+  });
+  await new Promise((resolve) => target.listen(0, '127.0.0.1', resolve));
+
+  const db = openMemoryDatabase();
+  const store = createStore(db);
+  const cfg = resolveConfig({ gateway: { port: 0 } });
+  const authService = createAuthService(store, cfg);
+  const gateway = createGateway({ cfg, target: { hostname: '127.0.0.1', port: target.address().port }, authService, logger: { warn() {}, info() {} } });
+  const port = await listenGateway(gateway);
+  t.after(async () => {
+    await gateway.close();
+    await new Promise((resolve) => target.close(resolve));
+    db.close();
+  });
+
+  const boot = await httpJson(port, '/api/auth/bootstrap', { method: 'POST', body: { username: 'admin', password: 'longenough-password' } });
+  const cookie = `mt_session=${extractCookieToken(boot.headers['set-cookie'])}`;
+
+  const outcome = await Promise.race([
+    wsTestClient(port, '/api/events.mux', { cookie }).then(() => 'resolved', (e) => `rejected:${e.message}`),
+    new Promise((resolve) => setTimeout(() => resolve('timeout'), 2000)),
+  ]);
+  // 浏览器侧收到 DSH 的普通 403 响应（不挂起、不崩溃）
+  assert.match(outcome, /rejected:expected upgrade, got HTTP 403/);
+});
